@@ -1,0 +1,98 @@
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-alfalfita-cloud-bucket-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: alias/aws/s3
+      PublicAccessBlockConfiguration:
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        QueueConfigurations:
+          - Event: s3:ObjectCreated:*
+            Queue: !GetAtt Queue.Arn
+          - Event: s3:ObjectRemoved:*
+            Queue: !GetAtt Queue.Arn
+    DependsOn:
+      - BucketToQueuePermission
+  BucketBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Id: RequireEncryptionInTransit
+        Version: '2012-10-17'
+        Statement:
+          - Principal: '*'
+            Action: '*'
+            Effect: Deny
+            Resource:
+              - !GetAtt Bucket.Arn
+              - !Sub ${Bucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+  Queue:
+    Type: AWS::SQS::Queue
+  BucketToQueuePermission:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt Queue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:s3:::${AWS::StackName}-alfalfita-cloud-bucket-${AWS::AccountId}
+      Queues:
+        - !Ref Queue
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: Function
+      CodeUri: src/Function
+      Handler: index.handler
+      Role: arn:aws:iam::619747668685:role/aws-sam-lambda-role
+      Runtime: nodejs18.x
+      MemorySize: 3008
+      Timeout: 30
+      Tracing: Active
+      Events:
+        Queue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt Queue.Arn
+            BatchSize: 1
+      Environment:
+        Variables:
+          MEDIA_ENDPOINT: https://lxlxpswfb.mediaconvert.us-east-1.amazonaws.com
+          MEDIA_ROLE: arn:aws:iam::619747668685:role/media-convert-role
+          TRANSCODED_VIDEO_BUCKET: serverless-video-transcoded-alfalfita-cloud-06122022
+      Policies:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:PassRole
+              - mediaconvert:*
+            Resource: arn:aws:iam::619747668685:role/media-convert-role
+    Metadata:
+      BuildProperties:
+        UseNpmCi: true
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${Function}
+Transform: AWS::Serverless-2016-10-31
